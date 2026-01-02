@@ -38,9 +38,14 @@ func DefaultConfig() *Config {
 		DefaultAgent: "claude",
 		Agents: map[string]AgentConfig{
 			"claude": {
-				Name:           "Claude Code",
-				Executable:     "npx",
-				Args:           []string{"@anthropics/claude-code", "--acp"},
+				Name:       "Claude Code",
+				Executable: "claude",
+				Args: []string{
+					"--print",
+					"--output-format", "stream-json",
+					"--input-format", "stream-json",
+					"--replay-user-messages",
+				},
 				PermissionMode: "default",
 			},
 		},

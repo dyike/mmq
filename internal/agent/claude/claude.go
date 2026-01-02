@@ -1,36 +1,33 @@
 package claude
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sync"
 
 	"github.com/dyike/g3c/internal/agent"
 	"github.com/dyike/g3c/internal/config"
-	"github.com/dyike/g3c/internal/jsonrpc"
 )
 
-// Claude implements the Agent interface for Claude Code CLI via ACP
+// Claude implements the Agent interface for Claude Code CLI
 type Claude struct {
-	config    config.AgentConfig
-	cmd       *exec.Cmd
-	client    *jsonrpc.Client
-	running   bool
-	mu        sync.Mutex
-	sessionID string
-
-	// Permission handling
-	permissionCh chan bool
+	config  config.AgentConfig
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  io.ReadCloser
+	running bool
+	mu      sync.Mutex
 }
 
 // New creates a new Claude agent
 func New(cfg config.AgentConfig) agent.Agent {
 	return &Claude{
-		config:       cfg,
-		permissionCh: make(chan bool, 1),
+		config: cfg,
 	}
 }
 
@@ -64,7 +61,6 @@ func (c *Claude) Start(ctx context.Context) error {
 	if c.config.WorkDir != "" {
 		c.cmd.Dir = c.config.WorkDir
 	} else {
-		// Use current working directory
 		cwd, _ := os.Getwd()
 		c.cmd.Dir = cwd
 	}
@@ -77,12 +73,13 @@ func (c *Claude) Start(ctx context.Context) error {
 	c.cmd.Env = env
 
 	// Get pipes
-	stdin, err := c.cmd.StdinPipe()
+	var err error
+	c.stdin, err = c.cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("failed to get stdin pipe: %w", err)
 	}
 
-	stdout, err := c.cmd.StdoutPipe()
+	c.stdout, err = c.cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("failed to get stdout pipe: %w", err)
 	}
@@ -95,43 +92,7 @@ func (c *Claude) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start claude: %w", err)
 	}
 
-	// Create JSON-RPC client
-	c.client = jsonrpc.NewClient(stdin, stdout)
 	c.running = true
-
-	// Initialize ACP
-	if err := c.initialize(ctx); err != nil {
-		c.Stop()
-		return fmt.Errorf("failed to initialize ACP: %w", err)
-	}
-
-	return nil
-}
-
-// initialize performs ACP handshake
-func (c *Claude) initialize(ctx context.Context) error {
-	params := map[string]interface{}{
-		"protocolVersion": "2025-01-01",
-		"capabilities": map[string]interface{}{
-			"prompts":   map[string]interface{}{},
-			"resources": map[string]interface{}{},
-			"tools":     map[string]interface{}{},
-		},
-		"clientInfo": map[string]interface{}{
-			"name":    "g3c",
-			"version": "0.1.0",
-		},
-	}
-
-	resp, err := c.client.Call(ctx, "initialize", params)
-	if err != nil {
-		return err
-	}
-
-	if resp.Error != nil {
-		return resp.Error
-	}
-
 	return nil
 }
 
@@ -146,8 +107,8 @@ func (c *Claude) Stop() error {
 
 	c.running = false
 
-	if c.client != nil {
-		c.client.Close()
+	if c.stdin != nil {
+		c.stdin.Close()
 	}
 
 	if c.cmd != nil && c.cmd.Process != nil {
@@ -163,6 +124,41 @@ func (c *Claude) IsRunning() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.running
+}
+
+// StreamMessage represents the input message format
+type StreamMessage struct {
+	Type    string `json:"type"`
+	Content string `json:"content,omitempty"`
+}
+
+// StreamOutput represents Claude's stream-json output
+type StreamOutput struct {
+	Type    string          `json:"type"`
+	Message json.RawMessage `json:"message,omitempty"`
+	Index   int             `json:"index,omitempty"`
+	Delta   *StreamDelta    `json:"delta,omitempty"`
+	Error   *StreamError    `json:"error,omitempty"`
+
+	// For content_block_start
+	ContentBlock *ContentBlock `json:"content_block,omitempty"`
+}
+
+type StreamDelta struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+type StreamError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+type ContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // Send sends a message and returns a channel for streaming responses
@@ -182,144 +178,124 @@ func (c *Claude) Send(ctx context.Context, prompt string, sessionID string) (<-c
 	go func() {
 		defer close(events)
 
-		// Create new session if needed
-		if c.sessionID == "" {
-			if err := c.createSession(ctx); err != nil {
-				events <- agent.StreamEvent{
-					Type:  agent.EventTypeError,
-					Error: fmt.Sprintf("failed to create session: %v", err),
+		// Send user message as stream-json input
+		msg := StreamMessage{
+			Type:    "user",
+			Content: prompt,
+		}
+		msgBytes, err := json.Marshal(msg)
+		if err != nil {
+			events <- agent.StreamEvent{
+				Type:  agent.EventTypeError,
+				Error: fmt.Sprintf("failed to marshal message: %v", err),
+			}
+			return
+		}
+
+		// Write to stdin with newline
+		_, err = fmt.Fprintf(c.stdin, "%s\n", msgBytes)
+		if err != nil {
+			events <- agent.StreamEvent{
+				Type:  agent.EventTypeError,
+				Error: fmt.Sprintf("failed to send message: %v", err),
+			}
+			return
+		}
+
+		// Read streaming response
+		scanner := bufio.NewScanner(c.stdout)
+		buf := make([]byte, 10*1024*1024) // 10MB buffer
+		scanner.Buffer(buf, len(buf))
+
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+
+			var output StreamOutput
+			if err := json.Unmarshal(line, &output); err != nil {
+				continue
+			}
+
+			event := c.processOutput(&output, sessionID)
+			if event != nil {
+				events <- *event
+				if event.Type == agent.EventTypeDone || event.Type == agent.EventTypeError {
+					return
 				}
-				return
 			}
 		}
 
-		// Register notification handlers
-		textCh := make(chan string, 100)
-		doneCh := make(chan struct{})
-		errCh := make(chan string, 1)
-
-		c.client.OnNotification("notifications/message", func(notif *jsonrpc.Notification) {
-			c.handleNotification(notif, textCh, doneCh, errCh)
-		})
-
-		// Send prompt
-		params := map[string]interface{}{
-			"sessionId": c.sessionID,
-			"prompt":    prompt,
+		if err := scanner.Err(); err != nil {
+			events <- agent.StreamEvent{
+				Type:  agent.EventTypeError,
+				Error: fmt.Sprintf("read error: %v", err),
+			}
+			return
 		}
 
-		// Make call in goroutine since it blocks until complete
-		go func() {
-			resp, err := c.client.Call(ctx, "session/prompt", params)
-			if err != nil {
-				errCh <- fmt.Sprintf("prompt error: %v", err)
-				return
-			}
-			if resp.Error != nil {
-				errCh <- fmt.Sprintf("prompt error: %s", resp.Error.Message)
-				return
-			}
-			close(doneCh)
-		}()
-
-		// Stream events
-		for {
-			select {
-			case text := <-textCh:
-				events <- agent.StreamEvent{
-					Type:      agent.EventTypeText,
-					Delta:     text,
-					SessionID: sessionID,
-				}
-			case errMsg := <-errCh:
-				events <- agent.StreamEvent{
-					Type:      agent.EventTypeError,
-					Error:     errMsg,
-					SessionID: sessionID,
-				}
-				return
-			case <-doneCh:
-				events <- agent.StreamEvent{
-					Type:      agent.EventTypeDone,
-					SessionID: sessionID,
-				}
-				return
-			case <-ctx.Done():
-				return
-			}
+		// If scanner finished without done event
+		events <- agent.StreamEvent{
+			Type:      agent.EventTypeDone,
+			SessionID: sessionID,
 		}
 	}()
 
 	return events, nil
 }
 
-// createSession creates a new ACP session
-func (c *Claude) createSession(ctx context.Context) error {
-	cwd, _ := os.Getwd()
-	params := map[string]interface{}{
-		"workingDirectory": cwd,
-	}
-
-	resp, err := c.client.Call(ctx, "session/new", params)
-	if err != nil {
-		return err
-	}
-
-	if resp.Error != nil {
-		return resp.Error
-	}
-
-	var result struct {
-		SessionID string `json:"sessionId"`
-	}
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return err
-	}
-
-	c.sessionID = result.SessionID
-	return nil
-}
-
-// handleNotification processes ACP notifications
-func (c *Claude) handleNotification(notif *jsonrpc.Notification, textCh chan<- string, doneCh chan struct{}, errCh chan<- string) {
-	var params struct {
-		SessionID string `json:"sessionId"`
-		Message   struct {
-			Type    string `json:"type"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text,omitempty"`
-			} `json:"content,omitempty"`
-		} `json:"message"`
-	}
-
-	if err := json.Unmarshal(notif.Params, &params); err != nil {
-		return
-	}
-
-	// Extract text content
-	for _, content := range params.Message.Content {
-		if content.Type == "text" && content.Text != "" {
-			select {
-			case textCh <- content.Text:
-			default:
+// processOutput converts Claude output to stream events
+func (c *Claude) processOutput(output *StreamOutput, sessionID string) *agent.StreamEvent {
+	switch output.Type {
+	case "content_block_delta":
+		if output.Delta != nil && output.Delta.Type == "text_delta" {
+			return &agent.StreamEvent{
+				Type:      agent.EventTypeText,
+				Delta:     output.Delta.Text,
+				SessionID: sessionID,
 			}
 		}
+
+	case "content_block_start":
+		if output.ContentBlock != nil && output.ContentBlock.Type == "tool_use" {
+			return &agent.StreamEvent{
+				Type:      agent.EventTypeToolUse,
+				SessionID: sessionID,
+				ToolUse: &agent.ToolUse{
+					ID:   output.ContentBlock.ID,
+					Name: output.ContentBlock.Name,
+				},
+			}
+		}
+
+	case "message_stop", "result":
+		return &agent.StreamEvent{
+			Type:      agent.EventTypeDone,
+			SessionID: sessionID,
+		}
+
+	case "error":
+		msg := "unknown error"
+		if output.Error != nil {
+			msg = output.Error.Message
+		}
+		return &agent.StreamEvent{
+			Type:      agent.EventTypeError,
+			Error:     msg,
+			SessionID: sessionID,
+		}
 	}
+
+	return nil
 }
 
 // Resume resumes an existing session with a new prompt
 func (c *Claude) Resume(ctx context.Context, sessionID string, agentSessionID string, prompt string) (<-chan agent.StreamEvent, error) {
-	c.sessionID = agentSessionID
 	return c.Send(ctx, prompt, sessionID)
 }
 
 // ApprovePermission approves or denies a permission request
 func (c *Claude) ApprovePermission(ctx context.Context, approved bool) error {
-	select {
-	case c.permissionCh <- approved:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return nil
 }

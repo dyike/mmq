@@ -151,6 +151,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 		}
 
+	case SendMessageMsg:
+		// Create session if needed
+		if m.currentSession == nil {
+			agentName := m.agentMgr.GetActive()
+			if agentName == "" {
+				agentName = "claude"
+			}
+			session, err := m.db.CreateSession(agentName, nil)
+			if err != nil {
+				m.err = err
+				return m, nil
+			}
+			m.currentSession = session
+			m.sessions = append([]*storage.Session{session}, m.sessions...)
+			m.sidebarIndex = 0
+		}
+		// Send message
+		return m, m.doSendMessage(msg.Content, m.currentSession)
+
 	case streamCmd:
 		m.streaming = true
 		m.streamEvents = msg.events
@@ -350,11 +369,6 @@ func (m Model) deleteSession() tea.Msg {
 	m.currentSession = nil
 	m.messages = nil
 	return m.loadSessions()
-}
-
-// SendMessageMsg triggers sending a message
-type SendMessageMsg struct {
-	Content string
 }
 
 // sendMessage returns a command to send a message
