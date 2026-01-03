@@ -43,8 +43,7 @@ func DefaultConfig() *Config {
 				Args: []string{
 					"--print",
 					"--output-format", "stream-json",
-					"--input-format", "stream-json",
-					"--replay-user-messages",
+					"--verbose",
 				},
 				PermissionMode: "default",
 			},

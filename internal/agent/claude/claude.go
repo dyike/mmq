@@ -93,6 +93,7 @@ func (c *Claude) Start(ctx context.Context) error {
 	}
 
 	c.running = true
+	fmt.Fprintf(os.Stderr, "[DEBUG] Claude process started, PID: %d\n", c.cmd.Process.Pid)
 	return nil
 }
 
@@ -126,34 +127,23 @@ func (c *Claude) IsRunning() bool {
 	return c.running
 }
 
-// StreamMessage represents the input message format
-type StreamMessage struct {
-	Type    string `json:"type"`
-	Content string `json:"content,omitempty"`
-}
-
 // StreamOutput represents Claude's stream-json output
 type StreamOutput struct {
-	Type    string          `json:"type"`
-	Message json.RawMessage `json:"message,omitempty"`
-	Index   int             `json:"index,omitempty"`
-	Delta   *StreamDelta    `json:"delta,omitempty"`
-	Error   *StreamError    `json:"error,omitempty"`
-
-	// For content_block_start
-	ContentBlock *ContentBlock `json:"content_block,omitempty"`
-}
-
-type StreamDelta struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-type StreamError struct {
 	Type    string `json:"type"`
-	Message string `json:"message"`
+	Subtype string `json:"subtype,omitempty"`
+	Result  string `json:"result,omitempty"`
+	IsError bool   `json:"is_error,omitempty"`
+
+	// For assistant message
+	Message *AssistantMessage `json:"message,omitempty"`
 }
 
+// AssistantMessage represents the assistant's message
+type AssistantMessage struct {
+	Content []ContentBlock `json:"content"`
+}
+
+// ContentBlock represents a content block in the message
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
@@ -163,48 +153,66 @@ type ContentBlock struct {
 
 // Send sends a message and returns a channel for streaming responses
 func (c *Claude) Send(ctx context.Context, prompt string, sessionID string) (<-chan agent.StreamEvent, error) {
-	c.mu.Lock()
-	if !c.running {
-		c.mu.Unlock()
-		if err := c.Start(ctx); err != nil {
-			return nil, err
-		}
-		c.mu.Lock()
-	}
-	c.mu.Unlock()
-
 	events := make(chan agent.StreamEvent, 100)
 
 	go func() {
 		defer close(events)
 
-		// Send user message as stream-json input
-		msg := StreamMessage{
-			Type:    "user",
-			Content: prompt,
+		fmt.Fprintf(os.Stderr, "[DEBUG] Creating new Claude process for prompt: %s\n", prompt)
+
+		// Create a new process for each message (--print mode requires this)
+		args := append([]string{}, c.config.Args...)
+		cmd := exec.CommandContext(ctx, c.config.Executable, args...)
+
+		// Set working directory
+		if c.config.WorkDir != "" {
+			cmd.Dir = c.config.WorkDir
+		} else {
+			cwd, _ := os.Getwd()
+			cmd.Dir = cwd
 		}
-		msgBytes, err := json.Marshal(msg)
+
+		// Set environment
+		env := os.Environ()
+		for k, v := range c.config.Env {
+			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		}
+		cmd.Env = env
+
+		// Get pipes
+		stdin, err := cmd.StdinPipe()
 		if err != nil {
-			events <- agent.StreamEvent{
-				Type:  agent.EventTypeError,
-				Error: fmt.Sprintf("failed to marshal message: %v", err),
-			}
+			events <- agent.StreamEvent{Type: agent.EventTypeError, Error: err.Error()}
 			return
 		}
 
-		// Write to stdin with newline
-		_, err = fmt.Fprintf(c.stdin, "%s\n", msgBytes)
+		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			events <- agent.StreamEvent{
-				Type:  agent.EventTypeError,
-				Error: fmt.Sprintf("failed to send message: %v", err),
-			}
+			events <- agent.StreamEvent{Type: agent.EventTypeError, Error: err.Error()}
 			return
 		}
+
+		cmd.Stderr = os.Stderr
+
+		// Start process
+		if err := cmd.Start(); err != nil {
+			events <- agent.StreamEvent{Type: agent.EventTypeError, Error: err.Error()}
+			return
+		}
+		fmt.Fprintf(os.Stderr, "[DEBUG] Claude process started, PID: %d\n", cmd.Process.Pid)
+
+		// Write prompt and close stdin
+		_, err = fmt.Fprintf(stdin, "%s", prompt)
+		if err != nil {
+			events <- agent.StreamEvent{Type: agent.EventTypeError, Error: err.Error()}
+			return
+		}
+		stdin.Close()
+		fmt.Fprintf(os.Stderr, "[DEBUG] Prompt sent and stdin closed\n")
 
 		// Read streaming response
-		scanner := bufio.NewScanner(c.stdout)
-		buf := make([]byte, 10*1024*1024) // 10MB buffer
+		scanner := bufio.NewScanner(stdout)
+		buf := make([]byte, 10*1024*1024)
 		scanner.Buffer(buf, len(buf))
 
 		for scanner.Scan() {
@@ -213,33 +221,33 @@ func (c *Claude) Send(ctx context.Context, prompt string, sessionID string) (<-c
 				continue
 			}
 
+			fmt.Fprintf(os.Stderr, "[DEBUG] Raw: %s\n", string(line))
+
 			var output StreamOutput
 			if err := json.Unmarshal(line, &output); err != nil {
+				fmt.Fprintf(os.Stderr, "[DEBUG] Parse error: %v\n", err)
 				continue
 			}
 
 			event := c.processOutput(&output, sessionID)
 			if event != nil {
+				fmt.Fprintf(os.Stderr, "[DEBUG] Event: %+v\n", event)
 				events <- *event
 				if event.Type == agent.EventTypeDone || event.Type == agent.EventTypeError {
+					cmd.Wait()
 					return
 				}
 			}
 		}
 
+		cmd.Wait()
+
 		if err := scanner.Err(); err != nil {
-			events <- agent.StreamEvent{
-				Type:  agent.EventTypeError,
-				Error: fmt.Sprintf("read error: %v", err),
-			}
+			events <- agent.StreamEvent{Type: agent.EventTypeError, Error: err.Error()}
 			return
 		}
 
-		// If scanner finished without done event
-		events <- agent.StreamEvent{
-			Type:      agent.EventTypeDone,
-			SessionID: sessionID,
-		}
+		events <- agent.StreamEvent{Type: agent.EventTypeDone, SessionID: sessionID}
 	}()
 
 	return events, nil
@@ -248,43 +256,40 @@ func (c *Claude) Send(ctx context.Context, prompt string, sessionID string) (<-c
 // processOutput converts Claude output to stream events
 func (c *Claude) processOutput(output *StreamOutput, sessionID string) *agent.StreamEvent {
 	switch output.Type {
-	case "content_block_delta":
-		if output.Delta != nil && output.Delta.Type == "text_delta" {
-			return &agent.StreamEvent{
-				Type:      agent.EventTypeText,
-				Delta:     output.Delta.Text,
-				SessionID: sessionID,
+	case "assistant":
+		// Extract text from message content
+		if output.Message != nil {
+			var text string
+			for _, block := range output.Message.Content {
+				if block.Type == "text" {
+					text += block.Text
+				}
+			}
+			if text != "" {
+				return &agent.StreamEvent{
+					Type:      agent.EventTypeText,
+					Delta:     text,
+					SessionID: sessionID,
+				}
 			}
 		}
 
-	case "content_block_start":
-		if output.ContentBlock != nil && output.ContentBlock.Type == "tool_use" {
+	case "result":
+		if output.IsError {
 			return &agent.StreamEvent{
-				Type:      agent.EventTypeToolUse,
+				Type:      agent.EventTypeError,
+				Error:     output.Result,
 				SessionID: sessionID,
-				ToolUse: &agent.ToolUse{
-					ID:   output.ContentBlock.ID,
-					Name: output.ContentBlock.Name,
-				},
 			}
 		}
-
-	case "message_stop", "result":
 		return &agent.StreamEvent{
 			Type:      agent.EventTypeDone,
 			SessionID: sessionID,
 		}
 
-	case "error":
-		msg := "unknown error"
-		if output.Error != nil {
-			msg = output.Error.Message
-		}
-		return &agent.StreamEvent{
-			Type:      agent.EventTypeError,
-			Error:     msg,
-			SessionID: sessionID,
-		}
+	case "system":
+		// Ignore system messages (init, etc.)
+		return nil
 	}
 
 	return nil

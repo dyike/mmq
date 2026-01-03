@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -43,7 +44,7 @@ type Model struct {
 
 	// Streaming state
 	streaming    bool
-	streamBuf    strings.Builder
+	streamBuf    string
 	streamEvents <-chan agent.StreamEvent
 
 	// Dependencies
@@ -152,6 +153,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SendMessageMsg:
+		fmt.Fprintf(os.Stderr, "[DEBUG TUI] SendMessageMsg received: %s\n", msg.Content)
 		// Create session if needed
 		if m.currentSession == nil {
 			agentName := m.agentMgr.GetActive()
@@ -167,13 +169,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessions = append([]*storage.Session{session}, m.sessions...)
 			m.sidebarIndex = 0
 		}
+		fmt.Fprintf(os.Stderr, "[DEBUG TUI] Calling doSendMessage\n")
 		// Send message
 		return m, m.doSendMessage(msg.Content, m.currentSession)
 
 	case streamCmd:
 		m.streaming = true
 		m.streamEvents = msg.events
-		m.streamBuf.Reset()
+		m.streamBuf = ""
 		m.err = nil
 		// Load messages to show user message, then start streaming
 		return m, tea.Batch(
@@ -193,9 +196,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.streamEvents = nil
 		// Save assistant message
-		if m.streamBuf.Len() > 0 {
-			content := m.streamBuf.String()
-			m.streamBuf.Reset()
+		if len(m.streamBuf) > 0 {
+			content := m.streamBuf
+			m.streamBuf = ""
 			if m.currentSession != nil {
 				_, _ = m.db.CreateTextMessage(m.currentSession.ID, storage.MessageTypeAssistant, content)
 			}
@@ -315,7 +318,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleStreamEvent(event agent.StreamEvent) (tea.Model, tea.Cmd) {
 	switch event.Type {
 	case agent.EventTypeText:
-		m.streamBuf.WriteString(event.Delta)
+		m.streamBuf += event.Delta
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
 		return m, nil
@@ -532,9 +535,9 @@ func (m Model) renderMessages() string {
 	}
 
 	// Add streaming content
-	if m.streaming && m.streamBuf.Len() > 0 {
+	if m.streaming && len(m.streamBuf) > 0 {
 		b.WriteString(AssistantMessageStyle.Render("Assistant: "))
-		b.WriteString(m.streamBuf.String())
+		b.WriteString(m.streamBuf)
 		b.WriteString("▊") // Cursor
 	}
 
