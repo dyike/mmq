@@ -16,7 +16,7 @@ make build
 # 1. 创建集合
 mmq collection add ~/Documents/notes --name notes --mask "**/*.md"
 
-# 2. 设置LLM(会有个)
+# 2. 设置LLM(首次会下载模型)
 mmq setup
 
 # 2. 索引文档
