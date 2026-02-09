@@ -1,14 +1,11 @@
 package llm
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -35,7 +32,7 @@ var (
 
 	GenerateModelRef = HFRef{
 		Repo:     "ggml-org/Qwen3-0.6B-GGUF",
-		Filename: "qwen3-0_6b-q8_0.gguf",
+		Filename: "Qwen3-0.6B-Q8_0.gguf",
 		Revision: "main",
 	}
 )
@@ -77,16 +74,11 @@ func (d *Downloader) Download(ref HFRef) (string, error) {
 
 	// 生成本地文件路径
 	localPath := filepath.Join(d.opts.CacheDir, ref.Filename)
-	etagPath := localPath + ".etag"
-	checksumPath := localPath + ".sha256"
 
 	// 检查文件是否已存在
 	if !d.opts.ForceDownload {
 		if _, err := os.Stat(localPath); err == nil {
-			// 文件存在，检查ETag
-			if d.isFileUpToDate(localPath, etagPath, ref) {
-				return localPath, nil
-			}
+			return localPath, nil
 		}
 	}
 
@@ -94,7 +86,7 @@ func (d *Downloader) Download(ref HFRef) (string, error) {
 	url := d.buildDownloadURL(ref)
 
 	// 下载文件
-	if err := d.downloadFile(url, localPath, etagPath, checksumPath); err != nil {
+	if err := d.downloadFile(url, localPath); err != nil {
 		return "", err
 	}
 
@@ -113,46 +105,8 @@ func (d *Downloader) buildDownloadURL(ref HFRef) string {
 		ref.Repo, revision, ref.Filename)
 }
 
-// isFileUpToDate 检查文件是否是最新的
-func (d *Downloader) isFileUpToDate(localPath, etagPath string, ref HFRef) bool {
-	// 读取本地ETag
-	localETag, err := os.ReadFile(etagPath)
-	if err != nil {
-		return false
-	}
-
-	// 获取远程ETag
-	remoteETag, err := d.getRemoteETag(ref)
-	if err != nil {
-		// 无法获取远程ETag，假设文件是最新的
-		return true
-	}
-
-	return string(localETag) == remoteETag
-}
-
-// getRemoteETag 获取远程文件的ETag
-func (d *Downloader) getRemoteETag(ref HFRef) (string, error) {
-	url := d.buildDownloadURL(ref)
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	resp, err := client.Head(url)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	etag := resp.Header.Get("ETag")
-	etag = strings.Trim(etag, "\"")
-
-	return etag, nil
-}
-
 // downloadFile 下载文件
-func (d *Downloader) downloadFile(url, localPath, etagPath, checksumPath string) error {
+func (d *Downloader) downloadFile(url, localPath string) error {
 	// 创建临时文件
 	tmpPath := localPath + ".tmp"
 	tmpFile, err := os.Create(tmpPath)
@@ -192,12 +146,8 @@ func (d *Downloader) downloadFile(url, localPath, etagPath, checksumPath string)
 		},
 	}
 
-	// 计算SHA256校验和
-	hasher := sha256.New()
-	multiWriter := io.MultiWriter(tmpFile, hasher)
-
 	// 下载文件
-	_, err = io.Copy(multiWriter, progressReader)
+	_, err = io.Copy(tmpFile, progressReader)
 	if err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to write file: %w", err)
@@ -212,45 +162,7 @@ func (d *Downloader) downloadFile(url, localPath, etagPath, checksumPath string)
 		return fmt.Errorf("failed to rename file: %w", err)
 	}
 
-	// 保存ETag
-	etag := resp.Header.Get("ETag")
-	etag = strings.Trim(etag, "\"")
-	if etag != "" {
-		os.WriteFile(etagPath, []byte(etag), 0644)
-	}
-
-	// 保存校验和
-	checksum := hex.EncodeToString(hasher.Sum(nil))
-	os.WriteFile(checksumPath, []byte(checksum), 0644)
-
 	return nil
-}
-
-// VerifyChecksum 验证文件校验和
-func (d *Downloader) VerifyChecksum(localPath string) (bool, error) {
-	checksumPath := localPath + ".sha256"
-
-	// 读取保存的校验和
-	savedChecksum, err := os.ReadFile(checksumPath)
-	if err != nil {
-		return false, fmt.Errorf("failed to read checksum: %w", err)
-	}
-
-	// 计算文件校验和
-	file, err := os.Open(localPath)
-	if err != nil {
-		return false, fmt.Errorf("failed to open file: %w", err)
-	}
-	defer file.Close()
-
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, file); err != nil {
-		return false, fmt.Errorf("failed to compute checksum: %w", err)
-	}
-
-	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
-
-	return actualChecksum == string(savedChecksum), nil
 }
 
 // progressReader 带进度的Reader
