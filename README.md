@@ -1,4 +1,4 @@
-# MMQ - Modu Memory & Query CLI
+# MMQ - Model Memory & Query CLI
 
 `mmq` 是一个本地优先的RAG引擎和记忆管理系统的命令行工具。
 
