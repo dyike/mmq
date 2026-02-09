@@ -28,13 +28,13 @@ var (
 	}
 
 	RerankModelRef = HFRef{
-		Repo:     "Qwen/qwen3-reranker-0.6b-gguf",
+		Repo:     "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
 		Filename: "qwen3-reranker-0.6b-q8_0.gguf",
 		Revision: "main",
 	}
 
 	GenerateModelRef = HFRef{
-		Repo:     "Qwen/Qwen3-0.6B-GGUF",
+		Repo:     "ggml-org/Qwen3-0.6B-GGUF",
 		Filename: "qwen3-0_6b-q8_0.gguf",
 		Revision: "main",
 	}

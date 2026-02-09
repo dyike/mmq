@@ -121,6 +121,8 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		ref  llm.HFRef
 	}{
 		{"Embedding", llm.EmbeddingModelRef},
+		{"Rerank", llm.RerankModelRef},
+		{"Generate", llm.GenerateModelRef},
 	}
 
 	for _, m := range models {
