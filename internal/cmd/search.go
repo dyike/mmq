@@ -5,6 +5,7 @@ import (
 
 	"github.com/dyike/mmq/internal/format"
 	"github.com/dyike/mmq/pkg/mmq"
+	"github.com/dyike/mmq/pkg/store"
 	"github.com/spf13/cobra"
 )
 
@@ -103,10 +104,9 @@ func runVSearch(cmd *cobra.Command, args []string) error {
 	}
 	defer m.Close()
 
-	// 检查是否有嵌入
-	status, _ := m.Status()
-	if status.NeedsEmbedding > 0 {
-		fmt.Printf("Warning: %d documents need embeddings. Run 'mmq embed' first.\n\n", status.NeedsEmbedding)
+	// 检查索引健康状态
+	if health, err := m.GetStore().CheckIndexHealth(); err == nil {
+		store.PrintIndexHealthWarnings(health)
 	}
 
 	limit := numResults
@@ -143,10 +143,9 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 	defer m.Close()
 
-	// 检查是否有嵌入
-	status, _ := m.Status()
-	if status.NeedsEmbedding > 0 {
-		fmt.Printf("Warning: %d documents need embeddings. Run 'mmq embed' for better results.\n\n", status.NeedsEmbedding)
+	// 检查索引健康状态
+	if health, err := m.GetStore().CheckIndexHealth(); err == nil {
+		store.PrintIndexHealthWarnings(health)
 	}
 
 	limit := numResults
