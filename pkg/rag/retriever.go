@@ -3,6 +3,7 @@ package rag
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/dyike/mmq/pkg/llm"
 	"github.com/dyike/mmq/pkg/store"
@@ -157,15 +158,33 @@ func (r *Retriever) retrieveHybrid(query string, opts RetrieveOptions) ([]store.
 	return fused, nil
 }
 
-// rerank 使用LLM重排序
+// rerank 使用LLM重排序，并与RRF位置分数混合
+// 使用 position-aware blending：排名靠前的结果更信任检索，排名靠后的结果更信任重排器
 func (r *Retriever) rerank(query string, results []store.SearchResult) ([]store.SearchResult, error) {
 	if len(results) == 0 {
 		return results, nil
 	}
 
+	// 硬上限：最多重排40个文档（控制延迟和成本）
+	const rerankDocLimit = 40
+	candidates := results
+	if len(candidates) > rerankDocLimit {
+		candidates = candidates[:rerankDocLimit]
+	}
+
+	// 记录每个候选的RRF排名（1-indexed）
+	rrfRankMap := make(map[string]int)
+	for i, res := range candidates {
+		key := res.ID
+		if key == "" {
+			key = res.Path
+		}
+		rrfRankMap[key] = i + 1
+	}
+
 	// 转换为LLM文档格式
-	docs := make([]llm.Document, len(results))
-	for i, res := range results {
+	docs := make([]llm.Document, len(candidates))
+	for i, res := range candidates {
 		docs[i] = llm.Document{
 			ID:      res.ID,
 			Content: res.Content,
@@ -181,20 +200,58 @@ func (r *Retriever) rerank(query string, results []store.SearchResult) ([]store.
 
 	// 创建索引映射
 	indexMap := make(map[string]int)
-	for i, res := range results {
+	for i, res := range candidates {
 		indexMap[res.ID] = i
 	}
 
-	// 根据重排结果重新排序
+	// Position-aware blending: 混合 RRF 位置分数和重排器分数
+	// 排名 1-3:  75% RRF, 25% reranker（信任检索对精确匹配的判断）
+	// 排名 4-10: 60% RRF, 40% reranker
+	// 排名 11+:  40% RRF, 60% reranker（信任重排器对低排名的判断）
 	reranked := make([]store.SearchResult, 0, len(rerankResults))
 	for _, rr := range rerankResults {
-		if idx, ok := indexMap[rr.ID]; ok {
-			result := results[idx]
-			result.Score = rr.Score
-			result.Source = "rerank"
-			reranked = append(reranked, result)
+		idx, ok := indexMap[rr.ID]
+		if !ok {
+			continue
 		}
+
+		result := candidates[idx]
+
+		// 获取该文档的RRF排名
+		key := result.ID
+		if key == "" {
+			key = result.Path
+		}
+		rrfRank := rrfRankMap[key]
+		if rrfRank == 0 {
+			rrfRank = 30 // 默认排名
+		}
+
+		// 根据RRF排名选择混合权重
+		var rrfWeight float64
+		switch {
+		case rrfRank <= 3:
+			rrfWeight = 0.75
+		case rrfRank <= 10:
+			rrfWeight = 0.60
+		default:
+			rrfWeight = 0.40
+		}
+
+		// RRF位置分数：1/rank
+		rrfScore := 1.0 / float64(rrfRank)
+		// 混合最终分数
+		blendedScore := rrfWeight*rrfScore + (1-rrfWeight)*rr.Score
+
+		result.Score = blendedScore
+		result.Source = "rerank"
+		reranked = append(reranked, result)
 	}
+
+	// 按混合分数排序
+	sort.Slice(reranked, func(i, j int) bool {
+		return reranked[i].Score > reranked[j].Score
+	})
 
 	return reranked, nil
 }
