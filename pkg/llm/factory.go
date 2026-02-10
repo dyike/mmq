@@ -52,16 +52,15 @@ func resolveLibPath(cfgPath string) string {
 }
 
 // NewLLM 创建LLM实例
-// 优先 YzmaLLM（自动检测 ~/.cache/mmq/lib），fallback MockLLM
+// 使用 YzmaLLM（自动检测 ~/.cache/mmq/lib）
 func NewLLM(cfg ModelConfig) (LLM, error) {
 	libPath := resolveLibPath(cfg.LibPath)
 
-	if libPath != "" {
-		cfg.LibPath = libPath
-		fmt.Println("Initializing YzmaLLM (local inference via yzma)")
-		return NewYzmaLLM(cfg)
+	if libPath == "" {
+		return nil, fmt.Errorf("yzma library not found. Run 'mmq setup' to download the inference library")
 	}
 
-	fmt.Println("Initializing MockLLM (run 'mmq setup' for real inference)")
-	return NewMockLLM(300), nil
+	cfg.LibPath = libPath
+	fmt.Println("Initializing YzmaLLM (local inference via yzma)")
+	return NewYzmaLLM(cfg)
 }

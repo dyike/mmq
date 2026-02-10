@@ -36,7 +36,7 @@ func New(cfg Config) (*MMQ, error) {
 	}
 
 	// 初始化LLM
-	// 使用工厂方法创建LLM实例（根据build tags决定是Mock还是Real）
+	// 使用工厂方法创建LLM实例
 	modelCfg := llm.DefaultModelConfig()
 	modelCfg.Threads = cfg.Threads
 	modelCfg.Timeout = cfg.InactivityTimeout

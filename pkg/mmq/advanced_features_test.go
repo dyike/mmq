@@ -1,7 +1,10 @@
 package mmq
 
 import (
+	"fmt"
+	"math"
 	"os"
+	"sort"
 	"testing"
 
 	"github.com/dyike/mmq/pkg/llm"
@@ -9,13 +12,141 @@ import (
 	"github.com/dyike/mmq/pkg/store"
 )
 
+// testLLM 测试用的 LLM 实现（仅用于单元测试）
+type testLLM struct {
+	dimensions int
+	loaded     map[llm.ModelType]bool
+}
+
+func newTestLLM(dimensions int) *testLLM {
+	return &testLLM{
+		dimensions: dimensions,
+		loaded:     make(map[llm.ModelType]bool),
+	}
+}
+
+func (m *testLLM) Embed(text string, isQuery bool) ([]float32, error) {
+	if text == "" {
+		return nil, fmt.Errorf("empty text")
+	}
+	m.loaded[llm.ModelTypeEmbedding] = true
+
+	embedding := make([]float32, m.dimensions)
+	seed := uint32(0)
+	for _, c := range text {
+		seed = seed*31 + uint32(c)
+	}
+	for i := range embedding {
+		seed = seed*1103515245 + 12345
+		embedding[i] = float32(int32(seed)) / float32(math.MaxInt32)
+	}
+
+	// 归一化
+	var norm float64
+	for _, v := range embedding {
+		norm += float64(v) * float64(v)
+	}
+	norm = math.Sqrt(norm)
+	if norm > 0 {
+		for i := range embedding {
+			embedding[i] = float32(float64(embedding[i]) / norm)
+		}
+	}
+	return embedding, nil
+}
+
+func (m *testLLM) EmbedBatch(texts []string, isQuery bool) ([][]float32, error) {
+	embeddings := make([][]float32, len(texts))
+	for i, text := range texts {
+		emb, err := m.Embed(text, isQuery)
+		if err != nil {
+			return nil, err
+		}
+		embeddings[i] = emb
+	}
+	return embeddings, nil
+}
+
+func (m *testLLM) Rerank(query string, docs []llm.Document) ([]llm.RerankResult, error) {
+	m.loaded[llm.ModelTypeRerank] = true
+	results := make([]llm.RerankResult, len(docs))
+
+	queryWords := splitTestWords(query)
+	for i, doc := range docs {
+		docWords := splitTestWords(doc.Content)
+		common := 0
+		for _, qw := range queryWords {
+			for _, dw := range docWords {
+				if qw == dw {
+					common++
+					break
+				}
+			}
+		}
+		score := float64(0)
+		if len(queryWords) > 0 {
+			score = float64(common) / float64(len(queryWords))
+		}
+		results[i] = llm.RerankResult{ID: doc.ID, Score: score, Index: i}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+	return results, nil
+}
+
+func (m *testLLM) Generate(prompt string, opts llm.GenerateOptions) (string, error) {
+	m.loaded[llm.ModelTypeGenerate] = true
+	return fmt.Sprintf("Test generated response for: %s", prompt), nil
+}
+
+func (m *testLLM) ExpandQuery(query string) ([]llm.QueryExpansion, error) {
+	m.loaded[llm.ModelTypeGenerate] = true
+	return []llm.QueryExpansion{
+		{Type: "lex", Text: query, Weight: 1.0},
+		{Type: "vec", Text: query + " explanation", Weight: 0.8},
+		{Type: "hyde", Text: "This document explains " + query, Weight: 0.6},
+	}, nil
+}
+
+func (m *testLLM) Close() error {
+	m.loaded = make(map[llm.ModelType]bool)
+	return nil
+}
+
+func (m *testLLM) IsLoaded(modelType llm.ModelType) bool {
+	return m.loaded[modelType]
+}
+
+func (m *testLLM) SetModelPath(modelType llm.ModelType, path string) {}
+
+// splitTestWords 简单分词（测试用）
+func splitTestWords(text string) []string {
+	var words []string
+	var word []rune
+	for _, r := range text {
+		if r == ' ' || r == '\n' || r == '\t' {
+			if len(word) > 0 {
+				words = append(words, string(word))
+				word = nil
+			}
+		} else {
+			word = append(word, r)
+		}
+	}
+	if len(word) > 0 {
+		words = append(words, string(word))
+	}
+	return words
+}
+
 // TestQueryExpansion 测试查询扩展功能
 func TestQueryExpansion(t *testing.T) {
-	// 创建 Mock LLM
-	mockLLM := llm.NewMockLLM(300)
+	tLLM := newTestLLM(300)
 
 	// 测试 ExpandQuery
-	expansions, err := mockLLM.ExpandQuery("machine learning")
+	expansions, err := tLLM.ExpandQuery("machine learning")
 	if err != nil {
 		t.Fatalf("ExpandQuery failed: %v", err)
 	}
@@ -42,7 +173,7 @@ func TestQueryExpansion(t *testing.T) {
 
 // TestReranking 测试重排序功能
 func TestReranking(t *testing.T) {
-	mockLLM := llm.NewMockLLM(300)
+	tLLM := newTestLLM(300)
 
 	query := "deep learning"
 	docs := []llm.Document{
@@ -51,7 +182,7 @@ func TestReranking(t *testing.T) {
 		{ID: "3", Content: "Neural networks are used in deep learning", Title: "Neural Nets"},
 	}
 
-	results, err := mockLLM.Rerank(query, docs)
+	results, err := tLLM.Rerank(query, docs)
 	if err != nil {
 		t.Fatalf("Rerank failed: %v", err)
 	}
@@ -75,12 +206,12 @@ func TestReranking(t *testing.T) {
 
 // TestGeneration 测试文本生成功能
 func TestGeneration(t *testing.T) {
-	mockLLM := llm.NewMockLLM(300)
+	tLLM := newTestLLM(300)
 
 	prompt := "Explain what RAG is"
 	opts := llm.DefaultGenerateOptions()
 
-	result, err := mockLLM.Generate(prompt, opts)
+	result, err := tLLM.Generate(prompt, opts)
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
 	}
@@ -104,9 +235,9 @@ func TestIntegratedRetrieval(t *testing.T) {
 	}
 	defer st.Close()
 
-	// 创建 Mock LLM 和嵌入生成器
-	mockLLM := llm.NewMockLLM(300)
-	embGen := llm.NewEmbeddingGenerator(mockLLM, "mock-embed", 300)
+	// 创建测试用 LLM 和嵌入生成器
+	tLLM := newTestLLM(300)
+	embGen := llm.NewEmbeddingGenerator(tLLM, "test-embed", 300)
 
 	// 添加测试文档
 	err = st.IndexDocument(store.Document{
@@ -152,7 +283,7 @@ func TestIntegratedRetrieval(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to generate embedding: %v", err)
 			}
-			err = st.StoreEmbedding(doc.Hash, i, i*500, emb, "mock-embed")
+			err = st.StoreEmbedding(doc.Hash, i, i*500, emb, "test-embed")
 			if err != nil {
 				t.Fatalf("Failed to store embedding: %v", err)
 			}
@@ -160,7 +291,7 @@ func TestIntegratedRetrieval(t *testing.T) {
 	}
 
 	// 创建检索器
-	retriever := rag.NewRetriever(st, mockLLM, embGen)
+	retriever := rag.NewRetriever(st, tLLM, embGen)
 
 	t.Run("WithoutExpansion", func(t *testing.T) {
 		opts := rag.DefaultRetrieveOptions()
