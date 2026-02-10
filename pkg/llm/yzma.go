@@ -23,6 +23,12 @@ type YzmaLLM struct {
 	embVocab llama.Vocab
 	nEmbd    int32
 
+	// rerank 模型（cross-encoder）
+	rerankModel llama.Model
+	rerankCtx   llama.Context
+	rerankVocab llama.Vocab
+	nClsOut     int32
+
 	// generate 模型
 	genModel llama.Model
 	genCtx   llama.Context
@@ -80,6 +86,8 @@ func (y *YzmaLLM) ensureLoaded(modelType ModelType) error {
 	switch modelType {
 	case ModelTypeEmbedding:
 		return y.loadEmbeddingModel()
+	case ModelTypeRerank:
+		return y.loadRerankModel()
 	case ModelTypeGenerate:
 		return y.loadGenerateModel()
 	default:
@@ -146,6 +154,72 @@ func (y *YzmaLLM) loadEmbeddingModel() error {
 	y.loaded[ModelTypeEmbedding] = true
 
 	fmt.Printf("Loaded embedding model: %s (dim=%d)\n", modelPath, y.nEmbd)
+	return nil
+}
+
+// loadRerankModel 加载 Rerank 模型（cross-encoder）
+func (y *YzmaLLM) loadRerankModel() error {
+	modelPath := y.rerankModelPath
+	if modelPath == "" {
+		return fmt.Errorf("yzma: rerank model path not set")
+	}
+
+	// 检查模型文件是否存在
+	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
+		if _, err2 := os.Stat(modelPath + ".gguf"); err2 == nil {
+			modelPath = modelPath + ".gguf"
+			y.rerankModelPath = modelPath
+		} else {
+			fmt.Printf("Rerank model not found at %s, downloading...\n", modelPath)
+			opts := DefaultDownloadOptions()
+			if y.cacheDir != "" {
+				opts.CacheDir = y.cacheDir
+			}
+			downloader := NewDownloader(opts)
+			path, dlErr := downloader.Download(RerankModelRef)
+			if dlErr != nil {
+				return fmt.Errorf("yzma: rerank model not found and download failed: %w", dlErr)
+			}
+			modelPath = path
+			y.rerankModelPath = path
+		}
+	}
+
+	// 加载模型
+	model, err := llama.ModelLoadFromFile(modelPath, llama.ModelDefaultParams())
+	if err != nil {
+		return fmt.Errorf("yzma: failed to load rerank model %s: %w", modelPath, err)
+	}
+
+	// 配置 context（cross-encoder 模式，PoolingTypeRank）
+	ctxParams := llama.ContextDefaultParams()
+	ctxParams.NCtx = uint32(y.cfg.ContextSize)
+	ctxParams.NBatch = uint32(y.cfg.BatchSize)
+	ctxParams.PoolingType = llama.PoolingTypeRank
+	ctxParams.Embeddings = 1
+	if y.cfg.Threads > 0 {
+		ctxParams.NThreads = int32(y.cfg.Threads)
+		ctxParams.NThreadsBatch = int32(y.cfg.Threads)
+	}
+
+	ctx, err := llama.InitFromModel(model, ctxParams)
+	if err != nil {
+		llama.ModelFree(model)
+		return fmt.Errorf("yzma: failed to create rerank context: %w", err)
+	}
+
+	nClsOut := llama.ModelNClsOut(model)
+	if nClsOut == 0 {
+		nClsOut = 1 // 默认 1 维分类输出
+	}
+
+	y.rerankModel = model
+	y.rerankCtx = ctx
+	y.rerankVocab = llama.ModelGetVocab(model)
+	y.nClsOut = int32(nClsOut)
+	y.loaded[ModelTypeRerank] = true
+
+	fmt.Printf("Loaded rerank model: %s (n_cls_out=%d)\n", modelPath, y.nClsOut)
 	return nil
 }
 
@@ -261,25 +335,55 @@ func (y *YzmaLLM) EmbedBatch(texts []string, isQuery bool) ([][]float32, error) 
 	return embeddings, nil
 }
 
-// Rerank 使用 embedding 余弦相似度实现重排
+// Rerank 使用 cross-encoder 模型进行真正的重排
 func (y *YzmaLLM) Rerank(query string, docs []Document) ([]RerankResult, error) {
-	// 生成查询向量
-	queryVec, err := y.Embed(query, true)
-	if err != nil {
-		return nil, fmt.Errorf("yzma rerank: failed to embed query: %w", err)
+	if err := y.ensureLoaded(ModelTypeRerank); err != nil {
+		return nil, err
 	}
-	queryVec = normalizeVector(queryVec)
+
+	y.mu.Lock()
+	defer y.mu.Unlock()
 
 	results := make([]RerankResult, len(docs))
 	for i, doc := range docs {
-		docVec, err := y.Embed(doc.Content, false)
-		if err != nil {
-			return nil, fmt.Errorf("yzma rerank: failed to embed doc %d: %w", i, err)
-		}
-		docVec = normalizeVector(docVec)
+		// 拼接 query + doc 作为 cross-encoder 输入
+		input := query + "\n" + doc.Content
 
-		// 余弦相似度
-		score := cosineSimilarity(queryVec, docVec)
+		// tokenize
+		tokens := llama.Tokenize(y.rerankVocab, input, true, true)
+		if len(tokens) == 0 {
+			results[i] = RerankResult{ID: doc.ID, Score: 0, Index: i}
+			continue
+		}
+
+		// 截断到 context size
+		maxTokens := int(y.cfg.ContextSize)
+		if maxTokens > 0 && len(tokens) > maxTokens {
+			tokens = tokens[:maxTokens]
+		}
+
+		// 清理 memory（每对 query-doc 独立处理）
+		mem, err := llama.GetMemory(y.rerankCtx)
+		if err == nil && mem != 0 {
+			llama.MemoryClear(mem, true)
+		}
+
+		// Decode（Qwen3-Reranker 是 decoder 模型）
+		batch := llama.BatchGetOne(tokens)
+		if _, err := llama.Decode(y.rerankCtx, batch); err != nil {
+			results[i] = RerankResult{ID: doc.ID, Score: 0, Index: i}
+			continue
+		}
+
+		// 获取 rank 分数
+		scores, err := llama.GetEmbeddingsSeq(y.rerankCtx, 0, y.nClsOut)
+		if err != nil || len(scores) == 0 {
+			results[i] = RerankResult{ID: doc.ID, Score: 0, Index: i}
+			continue
+		}
+
+		// sigmoid 归一化到 [0,1]
+		score := sigmoid(float64(scores[0]))
 		results[i] = RerankResult{
 			ID:    doc.ID,
 			Score: score,
@@ -292,6 +396,11 @@ func (y *YzmaLLM) Rerank(query string, docs []Document) ([]RerankResult, error) 
 	})
 
 	return results, nil
+}
+
+// sigmoid 将 logit 归一化到 [0,1]
+func sigmoid(x float64) float64 {
+	return 1.0 / (1.0 + math.Exp(-x))
 }
 
 // Generate 使用 Generate 模型生成文本
@@ -431,6 +540,12 @@ func (y *YzmaLLM) Close() error {
 		y.loaded[ModelTypeEmbedding] = false
 	}
 
+	if y.loaded[ModelTypeRerank] {
+		llama.Free(y.rerankCtx)
+		llama.ModelFree(y.rerankModel)
+		y.loaded[ModelTypeRerank] = false
+	}
+
 	if y.loaded[ModelTypeGenerate] {
 		llama.Free(y.genCtx)
 		llama.ModelFree(y.genModel)
@@ -438,7 +553,7 @@ func (y *YzmaLLM) Close() error {
 	}
 
 	// 只有库已加载且所有模型都卸载了才关闭库
-	if y.libLoaded && !y.loaded[ModelTypeEmbedding] && !y.loaded[ModelTypeGenerate] {
+	if y.libLoaded && !y.loaded[ModelTypeEmbedding] && !y.loaded[ModelTypeRerank] && !y.loaded[ModelTypeGenerate] {
 		// yzma 的 BackendFree FFI 函数可能未正确注册，用 recover 保护
 		func() {
 			defer func() {
