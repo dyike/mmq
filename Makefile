@@ -1,6 +1,6 @@
 TAGS := sqlite_fts5
 
-.PHONY: build run clean setup
+.PHONY: build run clean setup test
 
 setup:
 	go run -tags "$(TAGS)" ./cmd/main.go setup
@@ -10,6 +10,9 @@ build:
 
 run:
 	go run -tags "$(TAGS)" ./cmd/main.go
+
+test:
+	go test -tags "$(TAGS)" ./...
 
 clean:
 	rm -f mmq

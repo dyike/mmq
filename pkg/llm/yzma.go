@@ -32,8 +32,9 @@ type YzmaLLM struct {
 	rerankModelPath    string
 	generateModelPath  string
 
-	loaded map[ModelType]bool
-	mu     sync.Mutex
+	loaded    map[ModelType]bool
+	libLoaded bool // 标记 llama.Load() 是否已成功调用
+	mu        sync.Mutex
 }
 
 // NewYzmaLLM 创建 YzmaLLM 实例
@@ -66,12 +67,13 @@ func (y *YzmaLLM) ensureLoaded(modelType ModelType) error {
 	}
 
 	// 只在第一次加载时初始化库
-	if len(y.loaded) == 0 {
+	if !y.libLoaded {
 		if err := llama.Load(y.libPath); err != nil {
 			return fmt.Errorf("yzma: failed to load library from %s: %w", y.libPath, err)
 		}
 		llama.Init()
 		llama.LogSet(llama.LogSilent())
+		y.libLoaded = true
 	}
 
 	switch modelType {
@@ -353,9 +355,18 @@ func (y *YzmaLLM) Close() error {
 		y.loaded[ModelTypeGenerate] = false
 	}
 
-	// 只有所有模型都卸载了才关闭库
-	if len(y.loaded) == 0 || (!y.loaded[ModelTypeEmbedding] && !y.loaded[ModelTypeGenerate]) {
-		llama.Close()
+	// 只有库已加载且所有模型都卸载了才关闭库
+	if y.libLoaded && !y.loaded[ModelTypeEmbedding] && !y.loaded[ModelTypeGenerate] {
+		// yzma 的 BackendFree FFI 函数可能未正确注册，用 recover 保护
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("Warning: yzma library cleanup recovered from panic: %v\n", r)
+				}
+			}()
+			llama.Close()
+		}()
+		y.libLoaded = false
 	}
 
 	return nil
