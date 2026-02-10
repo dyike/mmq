@@ -59,7 +59,7 @@ type Memory struct {
 	Tags       []string               `json:"tags,omitempty"`
 	Timestamp  time.Time              `json:"timestamp"`
 	ExpiresAt  *time.Time             `json:"expires_at,omitempty"` // 可选过期时间
-	Importance float64                `json:"importance"`            // 重要性权重 0.0-1.0
+	Importance float64                `json:"importance"`           // 重要性权重 0.0-1.0
 }
 
 // Document 文档
@@ -76,11 +76,12 @@ type Document struct {
 
 // RetrieveOptions 检索选项
 type RetrieveOptions struct {
-	Limit      int               // 返回结果数量
-	MinScore   float64           // 最小相关度分数
-	Collection string            // 集合过滤
-	Strategy   RetrievalStrategy // 检索策略
-	Rerank     bool              // 是否使用LLM重排
+	Limit       int               // 返回结果数量
+	MinScore    float64           // 最小相关度分数
+	Collection  string            // 集合过滤
+	Strategy    RetrievalStrategy // 检索策略
+	Rerank      bool              // 是否使用LLM重排
+	ExpandQuery bool              // 是否使用查询扩展（lex/vec/hyde）
 }
 
 // SearchOptions 搜索选项
@@ -108,12 +109,12 @@ type Status struct {
 
 // RecallOptions 记忆回忆选项
 type RecallOptions struct {
-	Limit               int          // 返回记忆数量
-	MemoryTypes         []MemoryType // 过滤记忆类型
-	ApplyDecay          bool         // 是否应用时间衰减
-	DecayHalflife       time.Duration // 衰减半衰期
-	WeightByImportance  bool         // 是否按重要性加权
-	MinRelevance        float64      // 最小相关度
+	Limit              int           // 返回记忆数量
+	MemoryTypes        []MemoryType  // 过滤记忆类型
+	ApplyDecay         bool          // 是否应用时间衰减
+	DecayHalflife      time.Duration // 衰减半衰期
+	WeightByImportance bool          // 是否按重要性加权
+	MinRelevance       float64       // 最小相关度
 }
 
 // Collection 集合
@@ -135,8 +136,8 @@ type CollectionOptions struct {
 
 // ContextEntry 上下文条目
 type ContextEntry struct {
-	Path      string    `json:"path"`       // 路径（/为全局，mmq://collection为集合级）
-	Content   string    `json:"content"`    // 上下文内容
+	Path      string    `json:"path"`    // 路径（/为全局，mmq://collection为集合级）
+	Content   string    `json:"content"` // 上下文内容
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -144,7 +145,7 @@ type ContextEntry struct {
 // DocumentListEntry 文档列表条目
 type DocumentListEntry struct {
 	ID         int       `json:"id"`
-	DocID      string    `json:"docid"`      // 短docid（前6位哈希）
+	DocID      string    `json:"docid"` // 短docid（前6位哈希）
 	Collection string    `json:"collection"`
 	Path       string    `json:"path"`
 	Title      string    `json:"title"`

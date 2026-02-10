@@ -149,11 +149,12 @@ func convertSearchResults(storeResults []store.SearchResult) []SearchResult {
 func (m *MMQ) RetrieveContext(query string, opts RetrieveOptions) ([]Context, error) {
 	// 转换为rag.RetrieveOptions
 	ragOpts := rag.RetrieveOptions{
-		Limit:      opts.Limit,
-		MinScore:   opts.MinScore,
-		Collection: opts.Collection,
-		Strategy:   rag.RetrievalStrategy(opts.Strategy),
-		Rerank:     opts.Rerank,
+		Limit:       opts.Limit,
+		MinScore:    opts.MinScore,
+		Collection:  opts.Collection,
+		Strategy:    rag.RetrievalStrategy(opts.Strategy),
+		Rerank:      opts.Rerank,
+		ExpandQuery: opts.ExpandQuery,
 	}
 
 	// 调用retriever

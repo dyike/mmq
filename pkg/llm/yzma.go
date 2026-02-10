@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/hybridgroup/yzma/pkg/llama"
@@ -314,28 +315,109 @@ func truncateString(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "..."
 }
 
-// ExpandQuery 使用规则进行查询扩展
-// 演示 Generate 模型已加载，并提供有意义的扩展
+// ExpandQuery 结构化查询扩展，生成带类型的查询变体
+// lex: 词法搜索变体（关键词/同义词）
+// vec: 语义搜索变体（语义重述）
+// hyde: 假设文档嵌入（假设性回答）
 func (y *YzmaLLM) ExpandQuery(query string) ([]QueryExpansion, error) {
-	// 尝试加载 Generate 模型（演示目的）
-	if err := y.ensureLoaded(ModelTypeGenerate); err != nil {
-		// 模型加载失败，返回基本扩展
-		return []QueryExpansion{
-			{Type: "lex", Text: query, Weight: 1.0},
-			{Type: "vec", Text: query, Weight: 0.9},
-		}, nil
+	// 原始查询始终作为 lex + vec 双通道，权重最高
+	expansions := []QueryExpansion{
+		{Type: "lex", Text: query, Weight: 2.0},
+		{Type: "vec", Text: query, Weight: 2.0},
 	}
 
-	fmt.Println("Generate model loaded, creating query expansions...")
+	// 分词
+	words := splitQueryWords(query)
 
-	// 基于规则的查询扩展
-	expansions := []QueryExpansion{
-		{Type: "lex", Text: query, Weight: 1.0},
-		{Type: "vec", Text: query, Weight: 0.9},
-		{Type: "hyde", Text: query, Weight: 0.7},
+	// --- lex 扩展：关键词变体，适合 BM25 ---
+	// 提取有意义的关键词（去短词）
+	var keywords []string
+	for _, w := range words {
+		if len([]rune(w)) > 2 {
+			keywords = append(keywords, w)
+		}
+	}
+	// 单独关键词作为 lex 查询
+	if len(keywords) > 1 {
+		for _, kw := range keywords {
+			expansions = append(expansions, QueryExpansion{
+				Type: "lex", Text: kw, Weight: 0.5,
+			})
+		}
+	}
+	// bigram 组合
+	if len(keywords) > 2 {
+		for i := 0; i < len(keywords)-1; i++ {
+			bigram := keywords[i] + " " + keywords[i+1]
+			expansions = append(expansions, QueryExpansion{
+				Type: "lex", Text: bigram, Weight: 0.7,
+			})
+		}
+	}
+
+	// --- 尝试使用 LLM Generate 生成更高质量的 vec/hyde 扩展 ---
+	if err := y.ensureLoaded(ModelTypeGenerate); err == nil {
+		// vec 扩展：语义重述
+		vecPrompt := fmt.Sprintf(
+			"Rephrase this search query using different words but same meaning. "+
+				"Output ONLY the rephrased query, nothing else.\nQuery: %s\nRephrased:", query)
+		if vecText, err := y.Generate(vecPrompt, GenerateOptions{MaxTokens: 100}); err == nil {
+			vecText = strings.TrimSpace(vecText)
+			if vecText != "" && vecText != query && !strings.HasPrefix(vecText, "[") {
+				expansions = append(expansions, QueryExpansion{
+					Type: "vec", Text: vecText, Weight: 1.0,
+				})
+			}
+		}
+
+		// hyde 扩展：假设文档（生成一段假设性回答作为查询）
+		hydePrompt := fmt.Sprintf(
+			"Write a short paragraph (2-3 sentences) that would be a good answer to this query. "+
+				"Output ONLY the paragraph, nothing else.\nQuery: %s\nAnswer:", query)
+		if hydeText, err := y.Generate(hydePrompt, GenerateOptions{MaxTokens: 200}); err == nil {
+			hydeText = strings.TrimSpace(hydeText)
+			if hydeText != "" && !strings.HasPrefix(hydeText, "[") {
+				expansions = append(expansions, QueryExpansion{
+					Type: "hyde", Text: hydeText, Weight: 0.8,
+				})
+			}
+		}
+	} else {
+		// LLM 不可用时的规则 vec 扩展：重排词序
+		if len(words) >= 3 {
+			// 反转关键词顺序作为语义变体
+			reversed := make([]string, len(keywords))
+			for i, w := range keywords {
+				reversed[len(keywords)-1-i] = w
+			}
+			expansions = append(expansions, QueryExpansion{
+				Type: "vec", Text: strings.Join(reversed, " "), Weight: 0.6,
+			})
+		}
 	}
 
 	return expansions, nil
+}
+
+// splitQueryWords 将查询分割为单词（处理中英文混合）
+func splitQueryWords(text string) []string {
+	var words []string
+	var word []rune
+
+	for _, r := range text {
+		if r == ' ' || r == '\n' || r == '\t' || r == ',' || r == '.' || r == '?' || r == '!' {
+			if len(word) > 0 {
+				words = append(words, string(word))
+				word = nil
+			}
+		} else {
+			word = append(word, r)
+		}
+	}
+	if len(word) > 0 {
+		words = append(words, string(word))
+	}
+	return words
 }
 
 // Close 释放模型和上下文

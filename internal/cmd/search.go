@@ -154,13 +154,14 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		limit = 0
 	}
 
-	// 使用混合检索策略
+	// 使用混合检索策略 + 查询扩展 + 重排
 	results, err := m.RetrieveContext(query, mmq.RetrieveOptions{
-		Limit:      limit,
-		MinScore:   minScore,
-		Collection: collectionFlag,
-		Strategy:   mmq.StrategyHybrid,
-		Rerank:     true, // 启用重排 LlamaCpp
+		Limit:       limit,
+		MinScore:    minScore,
+		Collection:  collectionFlag,
+		Strategy:    mmq.StrategyHybrid,
+		Rerank:      true, // 启用重排
+		ExpandQuery: true, // 启用结构化查询扩展（lex/vec/hyde）
 	})
 
 	if err != nil {
