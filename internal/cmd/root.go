@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/dyike/mmq/pkg/mmq"
 	"github.com/spf13/cobra"
@@ -25,13 +26,51 @@ var (
 	outputFormat   string
 )
 
+// printUsageTree 从 cobra 命令树自动生成usage
+func printUsageTree(root *cobra.Command) {
+	var lines []string
+	maxLen := 0
+
+	// 收集所有命令行
+	var collect func(cmd *cobra.Command, prefix string)
+	collect = func(cmd *cobra.Command, prefix string) {
+		for _, sub := range cmd.Commands() {
+			if sub.Hidden || sub.Name() == "help" || sub.Name() == "completion" {
+				continue
+			}
+			if sub.HasSubCommands() {
+				collect(sub, prefix+sub.Name()+" ")
+			} else {
+				use := prefix + sub.Use
+				if len(use) > maxLen {
+					maxLen = len(use)
+				}
+				lines = append(lines, use+"\t"+sub.Short)
+			}
+		}
+	}
+	collect(root, root.Name()+" ")
+
+	// 对齐输出
+	fmt.Println("Usage:")
+	for _, line := range lines {
+		parts := strings.SplitN(line, "\t", 2)
+		padding := maxLen - len(parts[0]) + 2
+		if padding < 2 {
+			padding = 2
+		}
+		fmt.Printf("  %s%s- %s\n", parts[0], strings.Repeat(" ", padding), parts[1])
+	}
+}
+
 // rootCmd represents the base command
 var rootCmd = &cobra.Command{
-	Use:   "mmq",
-	Short: "Modu Memory & Query - RAG and memory management",
-	Long: `MMQ is a local-first RAG engine and memory management system.
-It provides hybrid search (BM25 + Vector + LLM reranking) and persistent memory storage.`,
+	Use:     "mmq",
+	Short:   "Model Memory & Query - RAG and memory management",
 	Version: Version,
+	Run: func(cmd *cobra.Command, args []string) {
+		printUsageTree(cmd)
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -60,6 +99,7 @@ func init() {
 
 	// 版本模板
 	rootCmd.SetVersionTemplate(fmt.Sprintf("mmq version %s (built %s)\n", Version, BuildTime))
+
 }
 
 // getMMQ 获取MMQ实例（辅助函数）
