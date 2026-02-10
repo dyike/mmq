@@ -347,6 +347,22 @@ func splitWords(text string) []string {
 
 // retrieveWithExpansion 使用查询扩展进行检索
 func (r *Retriever) retrieveWithExpansion(query string, opts RetrieveOptions) ([]store.SearchResult, error) {
+	// 0. 强信号检测：先做一次快速 BM25 搜索
+	//    如果 top score >= 0.85 且与第二名差距 >= 0.15，说明 BM25 已有精确匹配，
+	//    跳过昂贵的 LLM query expansion
+	initialFTS, _ := r.retrieveFTS(query, opts)
+	if len(initialFTS) > 0 {
+		topScore := initialFTS[0].Score
+		secondScore := 0.0
+		if len(initialFTS) > 1 {
+			secondScore = initialFTS[1].Score
+		}
+		if topScore >= 0.85 && (topScore-secondScore) >= 0.15 {
+			fmt.Printf("Strong BM25 signal (%.2f) — skipping query expansion\n", topScore)
+			return r.retrieveSingleQuery(query, opts)
+		}
+	}
+
 	// 1. 扩展查询（带缓存）
 	expansions, err := r.expandQueryWithCache(query)
 	if err != nil {
