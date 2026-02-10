@@ -341,6 +341,38 @@ func (m *MMQ) CountMemories() (int, error) {
 	return m.memoryManager.Count()
 }
 
+// CountMemoriesByType 按类型统计记忆数量
+func (m *MMQ) CountMemoriesByType(memType MemoryType) (int, error) {
+	return m.memoryManager.CountByType(memory.MemoryType(memType))
+}
+
+// ListMemoriesByType 按类型列出所有记忆
+func (m *MMQ) ListMemoriesByType(memType MemoryType) ([]Memory, error) {
+	memories, err := m.memoryManager.GetByType(memory.MemoryType(memType))
+	if err != nil {
+		return nil, err
+	}
+	return convertToMMQMemoriesFromInternal(memories), nil
+}
+
+// convertToMMQMemoriesFromInternal 从 memory.Memory 转换为 mmq.Memory
+func convertToMMQMemoriesFromInternal(memories []memory.Memory) []Memory {
+	result := make([]Memory, len(memories))
+	for i, mem := range memories {
+		result[i] = Memory{
+			ID:         mem.ID,
+			Type:       MemoryType(mem.Type),
+			Content:    mem.Content,
+			Metadata:   mem.Metadata,
+			Tags:       mem.Tags,
+			Timestamp:  mem.Timestamp,
+			ExpiresAt:  mem.ExpiresAt,
+			Importance: mem.Importance,
+		}
+	}
+	return result
+}
+
 // convertMemoryTypes 转换记忆类型
 func convertMemoryTypes(types []MemoryType) []memory.MemoryType {
 	if types == nil {
@@ -738,4 +770,9 @@ func (m *MMQ) GetEmbedding() *llm.EmbeddingGenerator {
 // GetMemoryManager 获取MemoryManager实例（用于高级用法）
 func (m *MMQ) GetMemoryManager() *memory.Manager {
 	return m.memoryManager
+}
+
+// GetLLM 获取LLM实例（用于高级用法）
+func (m *MMQ) GetLLM() llm.LLM {
+	return m.llm
 }

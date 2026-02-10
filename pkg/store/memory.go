@@ -345,10 +345,27 @@ func (s *Store) UpdateMemory(
 	return err
 }
 
-// DeleteMemory 删除记忆
+// DeleteMemory 删除记忆（支持前缀匹配）
 func (s *Store) DeleteMemory(id string) error {
-	_, err := s.db.Exec("DELETE FROM memories WHERE id = ?", id)
-	return err
+	var result sql.Result
+	var err error
+
+	// 如果 ID 较短（< 36 字符，即非完整 UUID），使用前缀匹配
+	if len(id) < 36 {
+		result, err = s.db.Exec("DELETE FROM memories WHERE id LIKE ?", id+"%")
+	} else {
+		result, err = s.db.Exec("DELETE FROM memories WHERE id = ?", id)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no memory found with ID prefix: %s", id)
+	}
+	return nil
 }
 
 // DeleteMemoriesBySession 删除指定会话的记忆

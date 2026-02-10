@@ -153,7 +153,7 @@ func (y *YzmaLLM) loadEmbeddingModel() error {
 	y.nEmbd = llama.ModelNEmbd(model)
 	y.loaded[ModelTypeEmbedding] = true
 
-	fmt.Printf("Loaded embedding model: %s (dim=%d)\n", modelPath, y.nEmbd)
+	fmt.Fprintf(os.Stderr, "Loaded embedding model: %s (dim=%d)\n", modelPath, y.nEmbd)
 	return nil
 }
 

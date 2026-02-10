@@ -96,6 +96,8 @@ func init() {
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(vsearchCmd)
 	rootCmd.AddCommand(queryCmd)
+	rootCmd.AddCommand(memoryCmd)
+	rootCmd.AddCommand(chatCmd)
 
 	// 版本模板
 	rootCmd.SetVersionTemplate(fmt.Sprintf("mmq version %s (built %s)\n", Version, BuildTime))
