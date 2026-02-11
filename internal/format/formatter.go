@@ -234,7 +234,7 @@ func outputDocDetailMarkdown(doc *mmq.DocumentDetail, full bool, lineNumbers boo
 	fmt.Printf("**DocID:** %s  \n", doc.DocID)
 	fmt.Printf("**Path:** %s/%s  \n", doc.Collection, doc.Path)
 	fmt.Printf("**Modified:** %s\n\n", doc.ModifiedAt.Format("2006-01-02 15:04:05"))
-	fmt.Println("---\n")
+	fmt.Printf("---\n")
 
 	content := doc.Content
 	if !full && len(content) > 500 {
@@ -260,7 +260,7 @@ func outputDocDetailsText(docs []mmq.DocumentDetail, full bool, lineNumbers bool
 func outputDocDetailsMarkdown(docs []mmq.DocumentDetail, full bool, lineNumbers bool) error {
 	for i, doc := range docs {
 		if i > 0 {
-			fmt.Println("\n---\n")
+			fmt.Printf("\n---\n")
 		}
 		if err := outputDocDetailMarkdown(&doc, full, lineNumbers); err != nil {
 			return err
@@ -318,7 +318,7 @@ func outputSearchText(results []mmq.SearchResult, full bool) error {
 }
 
 func outputSearchMarkdown(results []mmq.SearchResult, full bool) error {
-	fmt.Println("# Search Results\n")
+	fmt.Println("# Search Results")
 
 	for i, r := range results {
 		fmt.Printf("## %d. %s (%.4f)\n\n", i+1, r.Title, r.Score)
@@ -328,7 +328,7 @@ func outputSearchMarkdown(results []mmq.SearchResult, full bool) error {
 		if full {
 			fmt.Println("```")
 			fmt.Println(r.Content)
-			fmt.Println("```\n")
+			fmt.Println("```")
 		} else if r.Snippet != "" {
 			fmt.Printf("> %s\n\n", r.Snippet)
 		}
@@ -472,7 +472,7 @@ func outputStatusText(status mmq.Status) error {
 }
 
 func outputStatusMarkdown(status mmq.Status) error {
-	fmt.Println("# MMQ Status\n")
+	fmt.Printf("# MMQ Status\n")
 	fmt.Printf("**Database:** %s  \n", status.DBPath)
 	fmt.Printf("**Cache:** %s  \n", status.CacheDir)
 	fmt.Printf("**Documents:** %d  \n", status.TotalDocuments)
@@ -480,7 +480,7 @@ func outputStatusMarkdown(status mmq.Status) error {
 	fmt.Printf("**Collections:** %d\n\n", len(status.Collections))
 
 	if len(status.Collections) > 0 {
-		fmt.Println("## Collections\n")
+		fmt.Printf("## Collections\n")
 		for _, name := range status.Collections {
 			fmt.Printf("- %s\n", name)
 		}
