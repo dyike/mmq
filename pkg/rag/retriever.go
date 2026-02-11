@@ -134,7 +134,7 @@ func (r *Retriever) retrieveVector(query string, opts RetrieveOptions) ([]store.
 		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
 	}
 
-	return r.store.SearchVector(query, embedding, opts.Limit*2, opts.Collection)
+	return r.store.SearchVectorDocuments(query, embedding, opts.Limit*2, opts.Collection)
 }
 
 // retrieveHybrid 混合搜索
