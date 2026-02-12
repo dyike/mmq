@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/dyike/mmq/pkg/llm"
 	"github.com/dyike/mmq/pkg/store"
@@ -139,19 +140,32 @@ func (r *Retriever) retrieveVector(query string, opts RetrieveOptions) ([]store.
 
 // retrieveHybrid 混合搜索
 func (r *Retriever) retrieveHybrid(query string, opts RetrieveOptions) ([]store.SearchResult, error) {
-	// 1. BM25搜索
-	ftsResults, err := r.retrieveFTS(query, opts)
-	if err != nil {
-		return nil, fmt.Errorf("FTS search failed: %w", err)
+	var (
+		ftsResults []store.SearchResult
+		vecResults []store.SearchResult
+		ftsErr     error
+		vecErr     error
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		ftsResults, ftsErr = r.retrieveFTS(query, opts)
+	}()
+	go func() {
+		defer wg.Done()
+		vecResults, vecErr = r.retrieveVector(query, opts)
+	}()
+	wg.Wait()
+
+	if ftsErr != nil {
+		return nil, fmt.Errorf("FTS search failed: %w", ftsErr)
+	}
+	if vecErr != nil {
+		return nil, fmt.Errorf("vector search failed: %w", vecErr)
 	}
 
-	// 2. 向量搜索
-	vecResults, err := r.retrieveVector(query, opts)
-	if err != nil {
-		return nil, fmt.Errorf("vector search failed: %w", err)
-	}
-
-	// 3. RRF融合
 	resultLists := [][]store.SearchResult{ftsResults, vecResults}
 	fused := store.ReciprocalRankFusion(resultLists, opts.RRFWeights, opts.RRFK)
 
@@ -374,31 +388,44 @@ func (r *Retriever) retrieveWithExpansion(query string, opts RetrieveOptions) ([
 		return r.retrieveSingleQuery(query, opts)
 	}
 
-	// 2. 对每个扩展查询执行检索
+	type expansionResult struct {
+		results []store.SearchResult
+		weight  float64
+	}
+
+	ch := make(chan expansionResult, len(expansions))
+	var wg sync.WaitGroup
+	for _, exp := range expansions {
+		exp := exp
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var results []store.SearchResult
+			var err error
+
+			switch exp.Type {
+			case "lex":
+				results, err = r.retrieveFTS(exp.Text, opts)
+			case "vec", "hyde":
+				results, err = r.retrieveVector(exp.Text, opts)
+			default:
+				results, err = r.retrieveHybrid(exp.Text, opts)
+			}
+
+			if err == nil && len(results) > 0 {
+				ch <- expansionResult{results: results, weight: exp.Weight}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(ch)
+
 	var allResultLists [][]store.SearchResult
 	var weights []float64
-
-	for _, exp := range expansions {
-		var results []store.SearchResult
-		var err error
-
-		// 根据扩展类型选择检索策略
-		switch exp.Type {
-		case "lex":
-			// 词法查询 -> FTS
-			results, err = r.retrieveFTS(exp.Text, opts)
-		case "vec", "hyde":
-			// 向量/假设文档查询 -> Vector Search
-			results, err = r.retrieveVector(exp.Text, opts)
-		default:
-			// 默认使用混合搜索
-			results, err = r.retrieveHybrid(exp.Text, opts)
-		}
-
-		if err == nil && len(results) > 0 {
-			allResultLists = append(allResultLists, results)
-			weights = append(weights, exp.Weight)
-		}
+	for res := range ch {
+		allResultLists = append(allResultLists, res.results)
+		weights = append(weights, res.weight)
 	}
 
 	// 3. 如果所有查询都失败，使用原始查询

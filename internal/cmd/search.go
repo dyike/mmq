@@ -80,6 +80,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		Limit:      limit,
 		MinScore:   minScore,
 		Collection: collectionFlag,
+		Strategy:   mmq.StrategyFTS,
 	})
 
 	if err != nil {
@@ -114,10 +115,11 @@ func runVSearch(cmd *cobra.Command, args []string) error {
 		limit = 0
 	}
 
-	results, err := m.VectorSearch(query, mmq.SearchOptions{
+	results, err := m.Search(query, mmq.SearchOptions{
 		Limit:      limit,
 		MinScore:   minScore,
 		Collection: collectionFlag,
+		Strategy:   mmq.StrategyVector,
 	})
 
 	if err != nil {
@@ -154,13 +156,13 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 
 	// 使用混合检索策略 + 查询扩展 + 重排
-	results, err := m.RetrieveContext(query, mmq.RetrieveOptions{
+	results, err := m.Search(query, mmq.SearchOptions{
 		Limit:       limit,
 		MinScore:    minScore,
 		Collection:  collectionFlag,
 		Strategy:    mmq.StrategyHybrid,
-		Rerank:      true, // 启用重排
-		ExpandQuery: true, // 启用结构化查询扩展（lex/vec/hyde）
+		Rerank:      true,
+		ExpandQuery: true,
 	})
 
 	if err != nil {
@@ -168,34 +170,11 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 
 	// 转换为 SearchResult
-	searchResults := make([]mmq.SearchResult, len(results))
-	for i, ctx := range results {
-		searchResults[i] = mmq.SearchResult{
-			Score:      ctx.Relevance,
-			Title:      getMetadata(ctx.Metadata, "title"),
-			Content:    ctx.Text,
-			Snippet:    getMetadata(ctx.Metadata, "snippet"),
-			Source:     getMetadata(ctx.Metadata, "source"),
-			Collection: getMetadata(ctx.Metadata, "collection"),
-			Path:       getMetadata(ctx.Metadata, "path"),
-		}
-	}
-
-	if len(searchResults) == 0 {
+	if len(results) == 0 {
 		fmt.Println("No results found")
 		return nil
 	}
 
-	fmt.Printf("Found %d result(s) using hybrid search\n\n", len(searchResults))
-	return format.OutputSearchResults(searchResults, format.Format(outputFormat), fullContent)
-}
-
-// getMetadata 从元数据中获取字符串值
-func getMetadata(metadata map[string]interface{}, key string) string {
-	if val, ok := metadata[key]; ok {
-		if str, ok := val.(string); ok {
-			return str
-		}
-	}
-	return ""
+	fmt.Printf("Found %d result(s) using hybrid search\n\n", len(results))
+	return format.OutputSearchResults(results, format.Format(outputFormat), fullContent)
 }

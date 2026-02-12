@@ -86,9 +86,12 @@ type RetrieveOptions struct {
 
 // SearchOptions 搜索选项
 type SearchOptions struct {
-	Limit      int     // 返回结果数量
-	MinScore   float64 // 最小分数
-	Collection string  // 集合过滤
+	Limit       int               // 返回结果数量
+	MinScore    float64           // 最小分数
+	Collection  string            // 集合过滤
+	Strategy    RetrievalStrategy // 检索策略
+	Rerank      bool              // 是否使用LLM重排
+	ExpandQuery bool              // 是否使用查询扩展（lex/vec/hyde）
 }
 
 // IndexOptions 索引选项

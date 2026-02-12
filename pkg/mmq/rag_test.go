@@ -198,8 +198,9 @@ func TestHybridSearch(t *testing.T) {
 	}
 
 	// 测试混合搜索
-	results, err := m.HybridSearch("programming", SearchOptions{
-		Limit: 5,
+	results, err := m.Search("programming", SearchOptions{
+		Limit:    5,
+		Strategy: StrategyHybrid,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -329,6 +330,6 @@ func BenchmarkHybridSearch(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = m.HybridSearch("programming", SearchOptions{Limit: 10})
+		_, _ = m.Search("programming", SearchOptions{Limit: 10, Strategy: StrategyHybrid})
 	}
 }

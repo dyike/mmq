@@ -59,8 +59,9 @@ func TestVectorSearch(t *testing.T) {
 
 	// 测试向量搜索
 	t.Run("Basic VectorSearch", func(t *testing.T) {
-		results, err := m.VectorSearch("concurrent programming", SearchOptions{
-			Limit: 5,
+		results, err := m.Search("concurrent programming", SearchOptions{
+			Limit:    5,
+			Strategy: StrategyVector,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -89,9 +90,10 @@ func TestVectorSearch(t *testing.T) {
 
 	// 测试集合过滤
 	t.Run("VectorSearch with Collection Filter", func(t *testing.T) {
-		results, err := m.VectorSearch("programming language", SearchOptions{
+		results, err := m.Search("programming language", SearchOptions{
 			Limit:      5,
 			Collection: "tech",
+			Strategy:   StrategyVector,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -109,8 +111,9 @@ func TestVectorSearch(t *testing.T) {
 
 	// 测试分数排序
 	t.Run("VectorSearch Score Ordering", func(t *testing.T) {
-		results, err := m.VectorSearch("machine learning", SearchOptions{
-			Limit: 5,
+		results, err := m.Search("machine learning", SearchOptions{
+			Limit:    5,
+			Strategy: StrategyVector,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -158,8 +161,9 @@ func TestVectorSearchVsRetrieveContext(t *testing.T) {
 
 	// 对比VectorSearch和RetrieveContext
 	t.Run("VectorSearch returns full document", func(t *testing.T) {
-		results, _ := m.VectorSearch("goroutines", SearchOptions{
-			Limit: 1,
+		results, _ := m.Search("goroutines", SearchOptions{
+			Limit:    1,
+			Strategy: StrategyVector,
 		})
 
 		if len(results) == 0 {
@@ -211,6 +215,6 @@ func BenchmarkVectorSearch(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = m.VectorSearch("programming", SearchOptions{Limit: 5})
+		_, _ = m.Search("programming", SearchOptions{Limit: 5, Strategy: StrategyVector})
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/dyike/mmq/pkg/llm"
 	"github.com/dyike/mmq/pkg/memory"
@@ -123,26 +124,6 @@ func (m *MMQ) Status() (Status, error) {
 	return status, nil
 }
 
-// 类型转换辅助函数
-
-func convertSearchResults(storeResults []store.SearchResult) []SearchResult {
-	results := make([]SearchResult, len(storeResults))
-	for i, sr := range storeResults {
-		results[i] = SearchResult{
-			ID:         sr.ID,
-			Score:      sr.Score,
-			Title:      sr.Title,
-			Content:    sr.Content,
-			Snippet:    sr.Snippet,
-			Source:     sr.Source,
-			Collection: sr.Collection,
-			Path:       sr.Path,
-			Timestamp:  sr.Timestamp,
-		}
-	}
-	return results
-}
-
 // --- RAG检索API（Phase 3实现）---
 
 // RetrieveContext 检索相关上下文
@@ -183,51 +164,36 @@ func convertRagContexts(ragContexts []rag.Context) []Context {
 
 // Search BM25全文搜索（对标QMD的search）
 func (m *MMQ) Search(query string, opts SearchOptions) ([]SearchResult, error) {
-	results, err := m.store.SearchFTS(query, opts.Limit, opts.Collection)
-	if err != nil {
-		return nil, err
+	strategy := opts.Strategy
+	if strategy == "" {
+		strategy = StrategyFTS
 	}
 
-	// 转换类型
-	return convertSearchResults(results), nil
-}
-
-// VectorSearch 向量语义搜索（对标QMD的vsearch）
-// 返回完整文档（文档级别），不是文本块
-func (m *MMQ) VectorSearch(query string, opts SearchOptions) ([]SearchResult, error) {
-	// 生成查询向量
-	queryEmbed, err := m.embedding.Generate(query, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
-	}
-
-	// 文档级向量搜索
-	results, err := m.store.SearchVectorDocuments(query, queryEmbed, opts.Limit, opts.Collection)
-	if err != nil {
-		return nil, err
-	}
-
-	return convertSearchResults(results), nil
-}
-
-// HybridSearch 混合搜索
-func (m *MMQ) HybridSearch(query string, opts SearchOptions) ([]SearchResult, error) {
-	// 转换为rag.RetrieveOptions
 	ragOpts := rag.RetrieveOptions{
-		Limit:      opts.Limit,
-		MinScore:   opts.MinScore,
-		Collection: opts.Collection,
-		Strategy:   rag.StrategyHybrid,
-		Rerank:     false, // HybridSearch默认不重排
+		Limit:       normalizeSearchLimit(opts.Limit),
+		MinScore:    opts.MinScore,
+		Collection:  opts.Collection,
+		Strategy:    rag.RetrievalStrategy(strategy),
+		Rerank:      opts.Rerank,
+		ExpandQuery: opts.ExpandQuery,
 	}
 
-	// 调用retriever获取上下文
 	contexts, err := m.retriever.Retrieve(query, ragOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	// 转换为SearchResult
+	return convertContextsToSearchResults(contexts), nil
+}
+
+func normalizeSearchLimit(limit int) int {
+	if limit <= 0 {
+		return 1000
+	}
+	return limit
+}
+
+func convertContextsToSearchResults(contexts []rag.Context) []SearchResult {
 	results := make([]SearchResult, len(contexts))
 	for i, ctx := range contexts {
 		results[i] = SearchResult{
@@ -238,10 +204,11 @@ func (m *MMQ) HybridSearch(query string, opts SearchOptions) ([]SearchResult, er
 			Source:     getMetadataString(ctx.Metadata, "source"),
 			Collection: getMetadataString(ctx.Metadata, "collection"),
 			Path:       getMetadataString(ctx.Metadata, "path"),
+			Timestamp:  getMetadataTime(ctx.Metadata, "timestamp"),
 		}
 	}
 
-	return results, nil
+	return results
 }
 
 // getMetadataString 从元数据中获取字符串值
@@ -252,6 +219,15 @@ func getMetadataString(metadata map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+func getMetadataTime(metadata map[string]interface{}, key string) time.Time {
+	if val, ok := metadata[key]; ok {
+		if t, ok := val.(time.Time); ok {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // --- 记忆存储API（Phase 4实现）---
