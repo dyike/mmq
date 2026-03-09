@@ -393,10 +393,11 @@ func (r *Retriever) retrieveWithExpansion(query string, opts RetrieveOptions) ([
 		weight  float64
 	}
 
-	ch := make(chan expansionResult, len(expansions))
+	collected := make([]expansionResult, len(expansions))
+	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for _, exp := range expansions {
-		exp := exp
+	for i, exp := range expansions {
+		i, exp := i, exp
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -413,19 +414,22 @@ func (r *Retriever) retrieveWithExpansion(query string, opts RetrieveOptions) ([
 			}
 
 			if err == nil && len(results) > 0 {
-				ch <- expansionResult{results: results, weight: exp.Weight}
+				mu.Lock()
+				collected[i] = expansionResult{results: results, weight: exp.Weight}
+				mu.Unlock()
 			}
 		}()
 	}
 
 	wg.Wait()
-	close(ch)
 
 	var allResultLists [][]store.SearchResult
 	var weights []float64
-	for res := range ch {
-		allResultLists = append(allResultLists, res.results)
-		weights = append(weights, res.weight)
+	for _, res := range collected {
+		if res.results != nil {
+			allResultLists = append(allResultLists, res.results)
+			weights = append(weights, res.weight)
+		}
 	}
 
 	// 3. 如果所有查询都失败，使用原始查询

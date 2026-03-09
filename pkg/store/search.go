@@ -248,7 +248,7 @@ func ReciprocalRankFusion(resultLists [][]SearchResult, weights []float64, k int
 		}
 	}
 
-	// 转换为结果列表并排序
+	// 转换为结果列表并稳定排序（避免等分时顺序不确定）
 	var results []SearchResult
 	for _, entry := range scores {
 		result := entry.result
@@ -257,8 +257,11 @@ func ReciprocalRankFusion(resultLists [][]SearchResult, weights []float64, k int
 		results = append(results, result)
 	}
 
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		return results[i].ID < results[j].ID
 	})
 
 	return results

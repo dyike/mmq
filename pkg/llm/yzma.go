@@ -230,21 +230,26 @@ func (y *YzmaLLM) loadGenerateModel() error {
 		return fmt.Errorf("yzma: generate model path not set")
 	}
 
-	// 检查模型文件是否存在
+	// 检查模型文件是否存在（兼容不带 .gguf 后缀的配置）
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
-		// 自动下载
-		fmt.Printf("Generate model not found at %s, downloading...\n", modelPath)
-		opts := DefaultDownloadOptions()
-		if y.cacheDir != "" {
-			opts.CacheDir = y.cacheDir
+		if _, err2 := os.Stat(modelPath + ".gguf"); err2 == nil {
+			modelPath = modelPath + ".gguf"
+			y.generateModelPath = modelPath
+		} else {
+			// 自动下载
+			fmt.Printf("Generate model not found at %s, downloading...\n", modelPath)
+			opts := DefaultDownloadOptions()
+			if y.cacheDir != "" {
+				opts.CacheDir = y.cacheDir
+			}
+			downloader := NewDownloader(opts)
+			path, dlErr := downloader.Download(GenerateModelRef)
+			if dlErr != nil {
+				return fmt.Errorf("yzma: generate model not found and download failed: %w", dlErr)
+			}
+			modelPath = path
+			y.generateModelPath = path
 		}
-		downloader := NewDownloader(opts)
-		path, dlErr := downloader.Download(GenerateModelRef)
-		if dlErr != nil {
-			return fmt.Errorf("yzma: generate model not found and download failed: %w", dlErr)
-		}
-		modelPath = path
-		y.generateModelPath = path
 	}
 
 	// 加载模型

@@ -6,7 +6,7 @@ require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/google/uuid v1.6.0
-	github.com/hybridgroup/yzma v1.7.0
+	github.com/hybridgroup/yzma v1.10.0
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/spf13/cobra v1.10.2
 )

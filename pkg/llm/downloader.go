@@ -31,8 +31,8 @@ var (
 	}
 
 	GenerateModelRef = HFRef{
-		Repo:     "ggml-org/Qwen3-0.6B-GGUF",
-		Filename: "Qwen3-0.6B-Q8_0.gguf",
+		Repo:     "bartowski/Qwen_Qwen3.5-0.8B-GGUF",
+		Filename: "Qwen_Qwen3.5-0.8B-Q8_0.gguf",
 		Revision: "main",
 	}
 )

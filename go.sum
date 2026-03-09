@@ -7,8 +7,8 @@ github.com/ebitengine/purego v0.9.1 h1:a/k2f2HQU3Pi399RPW1MOaZyhKJL9w/xFpKAg4q1s
 github.com/ebitengine/purego v0.9.1/go.mod h1:iIjxzd6CiRiOG0UyXP+V1+jWqUXVjPKLAI0mRfJZTmQ=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/hybridgroup/yzma v1.7.0 h1:5aY6RFW1ytqoYijp+/A9q0UHG16XNBHVkn9Yb+48qgo=
-github.com/hybridgroup/yzma v1.7.0/go.mod h1:gjqXCQrLTZgWli62IQ4bxsZA952SQh4ELTSpPbaisEg=
+github.com/hybridgroup/yzma v1.10.0 h1:JU31tFpumCiTBu/jafW9H667nUe6zTmqg1beiHxaVH8=
+github.com/hybridgroup/yzma v1.10.0/go.mod h1:gjqXCQrLTZgWli62IQ4bxsZA952SQh4ELTSpPbaisEg=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/jupiterrider/ffi v0.5.1 h1:l7ANXU+Ex33LilVa283HNaf/sTzCrrht7D05k6T6nlc=

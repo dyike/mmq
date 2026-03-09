@@ -37,7 +37,7 @@ func DefaultConfig() Config {
 		CacheDir:          filepath.Join(homeDir, ".cache", "mmq", "models"),
 		EmbeddingModel:    "embeddinggemma-300M-Q8_0",
 		RerankModel:       "qwen3-reranker-0.6b-q8_0",
-		GenerateModel:     "Qwen3-0.6B-Q8_0",
+		GenerateModel:     "Qwen_Qwen3.5-0.8B-Q8_0",
 		ChunkSize:         3200,            // ~800 tokens
 		ChunkOverlap:      480,             // 15% overlap
 		Threads:           4,               // 4线程
@@ -82,7 +82,7 @@ func (c *Config) Validate() error {
 	}
 
 	if c.GenerateModel == "" {
-		c.GenerateModel = "Qwen3-0.6B-Q8_0"
+		c.GenerateModel = "Qwen_Qwen3.5-0.8B-Q8_0"
 	}
 
 	if c.Threads == 0 {
